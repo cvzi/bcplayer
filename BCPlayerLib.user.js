@@ -4,7 +4,7 @@
 // @oujs:author cuzi
 // @description Play bandcamp music.
 // @icon        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwAQMAAABtzGvEAAAABlBMVEUAAAAclZU8CPpPAAAAAXRSTlMAQObYZgAAAFZJREFUeF6N0DEKAzEMBMBAinxbT/NT9gkuVRg7kCFwqS7bTCVW0uOPPOvDK2hsnELQ2DiFoLFxCkFj4xSC+UMwYGBhYkDRwsRAXfdsBHW9r5HvJ27yBmrWa3qFBFkKAAAAAElFTkSuQmCC
-// @version     1
+// @version     2
 // @license     GNUGPL
 // @include     /^https?:\/\/.*bandcamp\..*$/
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/1.7/jquery.min.js
@@ -17,23 +17,35 @@
 
 function BCLibrary() {
 
+  var libversion = false;
+  var lastlibversion = false;
   var allTracks;
   var allAlbums;
   var allBands;
     
   var load = function() {
+    libversion = parseInt(GM_getValue("libversion",Number.MIN_SAFE_INTEGER),10);
+    if(lastlibversion == libversion) return;
     allTracks = JSON.parse(GM_getValue("tracks","{}"));
     allAlbums = JSON.parse(GM_getValue("albums","{}"));
     allBands = JSON.parse(GM_getValue("bands","{}"));
+    lastlibversion = libversion;
   };
     
   var save = function() {
+    if(libversion === false) {
+      throw Error("BCLibrary: save() cannot be called before load()");
+    }
+    libversion++;
+    
+    if(libversion == Number.MAX_SAFE_INTEGER) {
+      libersion = Number.MIN_SAFE_INTEGER;
+    }
+    GM_setValue("libversion",libversion);
     GM_setValue("tracks",JSON.stringify(allTracks));
     GM_setValue("albums",JSON.stringify(allAlbums));
     GM_setValue("bands",JSON.stringify(allBands));
   };
-  
-  load();
   
   var addBand = function(id,name) {
     load();
@@ -81,6 +93,10 @@ function BCLibrary() {
     
     save();
   };
+  
+  // Public
+  // ######
+  
   
   this.trackExists = function(id) {
     load();
@@ -226,6 +242,7 @@ function BCPlayer(Lib,id) {
   
   var playlist;
   var playlist_index;
+  
   var load = function() {
     playlist = JSON.parse(GM_getValue("playlist","[]"));
     playlist_index = JSON.parse(GM_getValue("playlist_index","-1"));
@@ -279,6 +296,9 @@ function BCPlayer(Lib,id) {
     }
   
   };
+    
+  // Public
+  // ######
     
   this.toString = function() {
     return "[Object Player: #"+id+"]";
@@ -555,6 +575,7 @@ function BCPlayer(Lib,id) {
 }
 
 function initBCLibrary(noButtons) {
+  // Show buttons next to tracks on an album page
 
 var box_style = {
   "position":"absolute",
@@ -660,10 +681,11 @@ var clickButtonAddTracks = function(ev) {
     showButtonAddAlbum(l);
     return {"library":l,"buttons":true};
   }
-  return {"library":l,"buttons":true};
+  return {"library":l,"buttons":false};
 }
 
 function BCPlayerLib_example() {
+  // minimal example
   GM_addStyle("\
   #playerX {z-index: 15; position:absolute; right: 10px; top: 48px; width:400px; height: 400px;\
     border:2px solid black; background: white; font-size:smaller;}\
