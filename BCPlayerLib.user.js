@@ -45,6 +45,7 @@ function BCLibrary() {
     GM_setValue("tracks",JSON.stringify(allTracks));
     GM_setValue("albums",JSON.stringify(allAlbums));
     GM_setValue("bands",JSON.stringify(allBands));
+    lastlibversion++;
   };
   
   var addBand = function(id,name) {
@@ -97,6 +98,9 @@ function BCLibrary() {
   // Public
   // ######
   
+  this.toString = function() {
+    return "[Object Library: Version-"+libversion+"]";
+  };
   
   this.trackExists = function(id) {
     load();
@@ -149,7 +153,7 @@ function BCLibrary() {
     load();
     if(!this.trackExists(id)) {
       cb(true);
-    }
+    }    
     
     // Will the album be empty?
     if(1 === allAlbums[allTracks[id].album_id].tracks.length)  {
@@ -179,6 +183,9 @@ function BCLibrary() {
   };
   
   this.getTrackById = function(tid) {
+    if(!(tid in allTracks)) {
+      return false;
+    }
     var trk = allTracks[tid];
     var alb = allAlbums[trk.album_id];
     var bnd = allBands[trk.band_id];
@@ -214,6 +221,10 @@ function BCLibrary() {
 }
 
 function BCPlayer(Lib,id) {
+  if(!(Lib instanceof BCLibrary)) {
+    throw new Error("BCPlayer needs a BCLibrary!");
+  }
+
   var mainWindow;
   var columns = [{ // Default column format
       title: "Name",
@@ -299,9 +310,13 @@ function BCPlayer(Lib,id) {
     
   // Public
   // ######
-    
+  
   this.toString = function() {
     return "[Object Player: #"+id+"]";
+  };
+  
+  this.getLibrary = function() {
+    return Lib;
   };
 
   this.getMainWindow = function() {
@@ -330,7 +345,7 @@ function BCPlayer(Lib,id) {
     }
     return mainWindow;
   };
-  this.refresh = function(what) {
+  this.refresh = function(what,noScroll) {
     // what:
     // 0/false/null/undefined -> refresh all
     // 1 -> only library
@@ -339,7 +354,6 @@ function BCPlayer(Lib,id) {
     // Library
     if(!what || 1 === what) {
       var scrollPosition = mainWindow.find(".library").scrollTop();  // Save scrollbar positon
-    
       var tracks = Lib.getAllTracks();
       mainWindow.find(".library tbody").html("");
       var s = false;
@@ -394,9 +408,9 @@ function BCPlayer(Lib,id) {
           
         }
       }
-      
-      mainWindow.find(".library").scrollTop(scrollPosition);  // Restore scrollbar positon
-    
+      if(!noScroll) {
+        mainWindow.find(".library").scrollTop(scrollPosition);  // Restore scrollbar positon
+      }
     }
     // Playlist
     if(!what || 2 === what) {
@@ -404,6 +418,11 @@ function BCPlayer(Lib,id) {
       for(var i = 0; i < playlist.length; i++) {
         var tid = playlist[i];
         var track = Lib.getTrackById(tid);
+        if(!track) { // Remove not existing tracks from playlist 
+          playlist.splice(i, 1);
+          i--;
+          continue;
+        }
         var li = $("<li></li>");
         var ctrl = $('<span class="ctrl" data-tid="'+tid+'" data-index="'+i+'"></span>');
         li.html(playlistFormatter(track));
@@ -426,25 +445,8 @@ function BCPlayer(Lib,id) {
       }
       
       // Scroll to active
-      if(this.playing) {
-        var pl =  mainWindow.find(".playlist");
-        var li = pl.find("li").eq(playlist_index);
-
-        var top = parseInt(li.position().top,10);
-        var scroll = pl.scrollTop();
-        var height = pl.height();
-           
-        if(top > height) {
-          //pl.scrollTop( scroll + (top-height) );
-          pl.animate({'scrollTop':scroll + (top-height)},400,"swing");
-        } else if(top < 0) {
-          //pl.scrollTop( scroll + top - li.height() - 5 );
-          pl.animate({'scrollTop':scroll + top - li.height() - 5},400,"swing");
-        } else {
-          // It is already visible
-        }
-        
-        
+      if(this.playing && !noScroll) {
+        this.scollPlaylistTo(playlist_index);
       }
 
     }
@@ -468,17 +470,40 @@ function BCPlayer(Lib,id) {
     this.refresh(2);
   };
   
+  this.scollPlaylistTo = function(index) {
+    var pl = mainWindow.find(".playlist");
+    var li = pl.find("li").eq(index);
+    
+    var pos = li.position();
+    if(!pos) return;
+
+    var top = parseInt(pos.top,10);
+    var scroll = pl.scrollTop();
+    var height = pl.height();
+       
+    if(top > height) {
+      //pl.scrollTop( scroll + (top-height) );
+      pl.animate({'scrollTop':scroll + (top-height)},400,"swing");
+    } else if(top < 0) {
+      //pl.scrollTop( scroll + top - li.height() - 5 );
+      pl.animate({'scrollTop':scroll + top - li.height() - 5},400,"swing");
+    } else {
+      // It is already visible
+    }
   
+  }  
   
   this.addToPlaylist = function(tid,index) {
     load();
     if(-1 == index) { // Add to end of list
       playlist.push(tid);
+      index = playlist.length-1;
     } else {
       playlist.splice(index, 0, tid);
     }
     save();    
-    this.refresh(2);
+    this.refresh(2,true);
+    this.scollPlaylistTo(index);
   };
   
   this.removeFromPlaylist = function(index) {
@@ -504,7 +529,7 @@ function BCPlayer(Lib,id) {
     load();
     
     if(0 === playlist.length) {
-      return;
+      return this.pause();
     }
     
     if(index != null) {
@@ -519,15 +544,32 @@ function BCPlayer(Lib,id) {
       playlist_index = 0;
     }
     
+ 
+    var tid = playlist[playlist_index];
+    var track = Lib.getTrackById(tid);
+    // Check whether the track exists or found the next existing one
+    while(!track && playlist_index < playlist.length && playlist_index >= 0) {
+      // Remove non existing track
+      playlist.splice(playlist_index, 1);
+      if(playlist_index == playlist.length) { // This is the last song or everything below the song was deleted, so now look above
+        playlist_index--;
+        if(playlist_index == -1) {
+          break; // No tracks found
+        }
+      }
+      tid = playlist[playlist_index];
+      track = Lib.getTrackById(tid);
+    }
+    if(!track) { // All tracks are not existing? well then stop playing
+      return this.pause();
+    }
+    
     // Stop native bandcamp player
     if(unsafeWindow.Cookie && unsafeWindow.Cookie.CommChannel) {
       var _comm = new unsafeWindow.Cookie.CommChannel("playlist");
       _comm.send("stop");
       _comm = null;
     }
-    
-    var tid = playlist[playlist_index];
-    var track = Lib.getTrackById(tid);
     
     if(speaker.tid == tid && speaker.tag[0].currentTime > 0.0) {
       // It was just paused
@@ -560,7 +602,9 @@ function BCPlayer(Lib,id) {
   
   this.pause = function() {
     this.playing = false;
-    speaker.tag[0].pause();
+    if(speaker.tag[0]) {
+      speaker.tag[0].pause();
+    }
   };
   
   this.getTime = function() {
