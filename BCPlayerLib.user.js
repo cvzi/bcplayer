@@ -15,6 +15,17 @@
 // ==/UserScript==
 "use strict";
 
+var doOnceAfterDelay = (function(){
+  var to = {};
+  return function(id, cb, wait){
+    if(id in to) {
+      clearTimeout(to[id]);
+    }
+    to[id] = setTimeout(cb, wait);
+  };
+})();
+
+
 function BCLibrary() {
 
   var libversion = false;
@@ -79,7 +90,7 @@ function BCLibrary() {
     allBands[albumobj.current.band_id].albums.push(albumobj.id);
     
     allAlbums[albumobj.id] = {};
-    var keys = ['id','album_id','artFullsizeUrl','artThumbURL','current.about','current.credits','current.release_date','current.title','url'];
+    var keys = ['id','album_id','artFullsizeUrl','artThumbURL','current.about','current.credits','current.publish_date','current.release_date','current.title','url'];
     for(var i = 0; i < keys.length; i++) {
       var subkeys = keys[i].split(".");
       var c = albumobj[subkeys[0]];
@@ -91,6 +102,75 @@ function BCLibrary() {
     
     allAlbums[albumobj.id].tracks = [];
     allAlbums[albumobj.id].totaltracks = albumobj.trackinfo.length;
+    
+    save();
+  };
+  
+  var addDegAlbum = function(id,albumobj) { // Add a temporary album that will be overwritten as soon as a track is added from the actual album page
+    load();
+      
+    if(allAlbums[id]) {
+      return;
+    }
+    
+    // Band exists?
+    if(!allBands[albumobj.current.band_id]) {
+      addBand(albumobj.current.band_id,albumobj.artist);
+    }
+    
+    allBands[albumobj.current.band_id].albums.push(id);
+    
+    allAlbums[id] = {};
+    var keys = ['artFullsizeUrl','artThumbURL','current.publish_date','current.release_date'];
+    for(var i = 0; i < keys.length; i++) {
+      var subkeys = keys[i].split(".");
+      var c = albumobj[subkeys[0]];
+      for(var j = 1; j < subkeys.length; j++) {
+        c = c[subkeys[j]];
+      }
+      allAlbums[id][subkeys.pop()] = c;
+    }
+    allAlbums[id].degenerated = true;
+    allAlbums[id].title = albumobj.albumtitle;
+    allAlbums[id].id = id;
+    allAlbums[id].album_id = id;
+    allAlbums[id].tracks = [];
+    allAlbums[id].totaltracks = 1;
+    var urlparts = albumobj.url.split("/");
+    allAlbums[id].url = urlparts[0]+"//"+urlparts[2]+albumobj.album_url
+    
+    save();
+  };
+  var addFakeAlbum = function(id,albumobj) { // Add a fake album for single songs
+    load();
+      
+    if(allAlbums[id]) {
+      return;
+    }
+    
+    // Band exists?
+    if(!allBands[albumobj.current.band_id]) {
+      addBand(albumobj.current.band_id,albumobj.artist);
+    }
+    
+    allBands[albumobj.current.band_id].albums.push(id);
+    
+    allAlbums[id] = {};
+    var keys = ['artFullsizeUrl','artThumbURL','current.about','current.credits','current.publish_date','current.release_date','url'];
+    for(var i = 0; i < keys.length; i++) {
+      var subkeys = keys[i].split(".");
+      var c = albumobj[subkeys[0]];
+      for(var j = 1; j < subkeys.length; j++) {
+        c = c[subkeys[j]];
+      }
+      allAlbums[id][subkeys.pop()] = c;
+    }
+    allAlbums[id].fake = true;
+    allAlbums[id].title = albumobj.current.title;
+    allAlbums[id].id = id;
+    allAlbums[id].album_id = id;
+    allAlbums[id].tracks = [];
+    allAlbums[id].totaltracks = 1;
     
     save();
   };
@@ -118,18 +198,40 @@ function BCLibrary() {
       cb(true);
     }
     
-    // Album exists?
-    if(!allAlbums[albumobj.id]) {
-      addAlbum(albumobj);
+    // Are we on an album or single track page?
+    if(albumobj.id == trackobj.id) {
+       // Single track page => albumobj is actually NOT a album obj
+       albumobj.id = null; 
     }
     
-    // Add the track
-    allAlbums[albumobj.id].tracks.push(trackobj.id);
+    if(albumobj.id !== null) {
+      // Album exists?
+      if(!allAlbums[albumobj.id]) {
+        addAlbum(albumobj); // Add album
+      } else if(allAlbums[albumobj.id].degenerated) {
+        // Overwrite temporary album
+        delete allAlbums[albumobj.id];
+        addAlbum(albumobj); // Add album
+      }
+    } else { // Single track page
+       if(albumobj.current.album_id !== null) {
+         // Single track page BUT there is a album somewhere. Add a temporary album for now.
+         albumobj.id = albumobj.current.album_id;
+         addDegAlbum(albumobj.current.album_id,albumobj);
+       } else {
+         // Single track page and NO album somewhere. Add a fake album.
+         albumobj.id = -trackobj.id;
+         albumobj.current.album_id = -trackobj.id;
+         addFakeAlbum(-trackobj.id,albumobj); // negative track id as album id
+       }
+    }
     
+    // Add the track to album
+    allAlbums[albumobj.id].tracks.push(trackobj.id);
     trackobj.band_id = albumobj.current.band_id;
     trackobj.album_id = albumobj.id;
 
-    
+    // Add track    
     allTracks[trackobj.id] = {};
     var keys = ['id','album_id','band_id','duration','file','title','track_num','has_lyrics'];
     for(var i = 0; i < keys.length; i++) {
@@ -144,6 +246,10 @@ function BCLibrary() {
     if(trackobj.has_lyrics && $.trim(lyrics)) {
       allTracks[trackobj.id]['lyrics'] = $.trim(lyrics);
     }
+    if(!trackobj.track_num) {
+     allTracks[trackobj.id]['track_num'] = 1;
+    }
+    
 
     save();
     cb(true);
@@ -156,9 +262,9 @@ function BCLibrary() {
     }    
     
     // Will the album be empty?
-    if(1 === allAlbums[allTracks[id].album_id].tracks.length)  {
+    if(allTracks[id].album_id && 1 === allAlbums[allTracks[id].album_id].tracks.length)  {
       // Yes - But will the band also have no albums?
-      if(1 === allBands[allTracks[id].band_id].albums.length) {
+      if(allTracks[id].band_id && 1 === allBands[allTracks[id].band_id].albums.length) {
         // Yes - Delete band
         delete allBands[allTracks[id].band_id];
       }
@@ -193,6 +299,7 @@ function BCLibrary() {
       "id" : tid,
       "duration" : trk.duration,
       "file" : trk.file,
+      "lyrics" : trk.lyrics,
       "title" : trk.title,
       "track_num" : trk.track_num, 
       "band" : {
@@ -206,7 +313,8 @@ function BCLibrary() {
         "about" : alb.about,
         "cover" : alb.artFullsizeUrl,
         "credits" : alb.credits,
-        "release_data" : alb.release_date,
+        "publish_date" : alb.publish_date,
+        "release_date" : alb.release_date,
         "title" : alb.title,
         "thumb" : alb.artThumbURL,
         "totaltracks" : alb.totaltracks,
@@ -219,7 +327,6 @@ function BCLibrary() {
   }; 
   
 }
-
 function BCPlayer(Lib,id) {
   if(!(Lib instanceof BCLibrary)) {
     throw new Error("BCPlayer needs a BCLibrary!");
@@ -303,7 +410,7 @@ function BCPlayer(Lib,id) {
     },
     'search' : function(ev) {
       var self = ev.data;
-      self.filter(this.value);
+      self.filter($(this).val());
     }
   
   };
@@ -340,11 +447,131 @@ function BCPlayer(Lib,id) {
       </div>');
       
       var searchfield = $('<input class="searchfield" name="search" type="text" value="">');
-      searchfield.on("keyup",this,events.search);
+      searchfield.on("keyup",this,function(ev) {
+        doOnceAfterDelay("searchfieldkeyup",function() {
+          events.search.call(searchfield[0],ev);
+        },400);
+      });
       mainWindow.find(".status").append(searchfield);
     }
     return mainWindow;
   };
+  
+  this.parseSearch = function(s) {
+    // Returns a filter object with one function match()
+  
+    // No search string, always return true
+    if(!s) {
+      return {match: function() {return true; } };
+    }
+
+    s = s.toLowerCase();    
+  
+    // No special magic words, just a substring in string test
+    if(s.indexOf(":") == -1) {
+      return {
+        match: function(track) {
+          return track.title.toLowerCase().indexOf(s) != -1 || track.band.title.toLowerCase().indexOf(s) != -1 || track.album.title.toLowerCase().indexOf(s) != -1;
+        } 
+      };
+    }
+
+    // Everything beyond this point is for searching with magic words.
+    
+    
+    // Example search string: "work artist :Gang starr album :Moment"
+    // Search for a song where the artist contains "Gang starr" AND the album contains "Moment"
+    // AND one of artist,album or songtitle contain "work".
+    
+    var SearchFunction = function(keys) {
+       // this class parses the cut-up search string and the attribute keys
+       var keys = keys;
+       var str = [];
+
+       this.push = function(v) {
+         str.push(v);
+       };
+       
+       var searchStr; // Evaluated from "str"
+       var subkeys = []; // Evaluated from "keys"
+       
+       this.match = function(track) {
+         for(var i = 0; i < subkeys.length; i++) { // foreach key
+           var c = track[subkeys[i][0]];
+           for(var j = 1; j < subkeys[i].length; j++) { // get the actual data for this key
+             c = c[subkeys[i][j]];
+           }
+           if((""+c).toLowerCase().indexOf(searchStr) != -1) { // check for a match or continue
+             return true;
+           }
+         }
+         return false;
+       };  
+       
+       this.eval = function() {
+         if(str.length > 0) {
+           // Search string
+           searchStr = str.join(" ");
+           
+           // Extract subkeys
+           for(var i = 0; i < keys.length; i++) {
+             subkeys.push(keys[i].split("."));
+           }           
+           
+         } else {
+           this.match = function() { // Overwrite with TRUE function
+             return true;
+           };
+         }
+       };
+    };
+    
+    var magicword = {
+      "all" : new SearchFunction(["title","album.title","band.title"]),
+      "artist" : new SearchFunction(["band.title"]),      
+      "album" : new SearchFunction(["album.title"]), 
+      "title" : new SearchFunction(["title"])
+    };
+    // Aliases:
+    magicword.band = magicword.artist;
+    magicword.performer = magicword.artist;
+    magicword.name = magicword.title;
+    magicword.song = magicword.title;
+    
+    var active = magicword.all; // Default
+    var parts = s.split(/\s*(:)\s*|\s/).map($.trim); // Cut the string up into "tokens"
+    for(var i = 0; i < parts.length; i++) {
+      if(parts[i] && parts[i] in magicword) {
+        if((i+1) < parts.length && parts[i+1] == ":") { // magic words must be followed by a :
+          active = magicword[parts[i]];
+          i++;
+        }
+      } else if(parts[i]){
+        active.push(parts[i]);
+      }
+    }
+    
+    for(var word in magicword) {
+      magicword[word].eval();
+    }
+    
+    
+    return {
+      match : function(track) {
+
+        for(var word in magicword) {
+          if(!magicword[word].match(track)) {
+             return false;
+          }
+        }
+        return true;
+      }
+  
+    };
+  
+  };
+  
+  
   this.refresh = function(what,noScroll) {
     // what:
     // 0/false/null/undefined -> refresh all
@@ -356,15 +583,12 @@ function BCPlayer(Lib,id) {
       var scrollPosition = mainWindow.find(".library").scrollTop();  // Save scrollbar positon
       var tracks = Lib.getAllTracks();
       mainWindow.find(".library tbody").html("");
-      var s = false;
-      if(searchString) s = searchString.toLowerCase();
+      var filter = this.parseSearch(searchString);
       for(var i = 0; i < tracks.length && i < 1000; i++) {
-        if(s 
-          && -1 == tracks[i].title.toLowerCase().indexOf(s) 
-          && -1 == tracks[i].band.title.toLowerCase().indexOf(s) 
-          && -1 == tracks[i].album.title.toLowerCase().indexOf(s)) {
+        if(!filter.match(tracks[i])) {
           continue;
         }
+        console.log(tracks[i]);
       
         var tr = $("<tr></tr>");
         var td_ctrl = $('<td class="ctrl" data-tid="'+tracks[i].id+'"></td>');
@@ -620,36 +844,74 @@ function BCPlayer(Lib,id) {
 
 function initBCLibrary(noButtons) {
   // Show buttons next to tracks on an album page
+  var box_style = {
+    "position":"absolute",
+    "color" : "black",
+    "background": "none repeat scroll 0 0 #fff", 
+    "border": "1px solid #d9d9d9",
+    "width" : "16px",
+    "height" : "16px",
+    "font-weight" : "800",
+    "text-align" : "center",
+    "font-size" : "14px",
+    "cursor" : "pointer"
+    };
 
-var box_style = {
-  "position":"absolute",
-  "color" : "black",
-  "background": "none repeat scroll 0 0 #fff", 
-  "border": "1px solid #d9d9d9",
-  "width" : "16px",
-  "height" : "16px",
-  "font-weight" : "800",
-  "text-align" : "center",
-  "font-size" : "14px",
-  "cursor" : "pointer"
-  };
-
-var showButtonAddAlbum = function(Lib) {
-  var thead = $('<thead></thead>').appendTo($("#track_table"));
-  var tr = $('<tr></tr>').appendTo(thead);
-  var td = $('<th colspan="3">Add whole album</th>').appendTo(tr).click(clickButtonAddTracks); 
-  
-  var pos = td.offset();
-  $("<div>+</div>").click(Lib,clickButtonAddTracks).css(box_style).css({
-    "top" : pos.top+2,
-    "left" : pos.left-19
-  }).appendTo(document.body);
-}
-var showButtonsAddTrack = function(Lib) {
-  $("#trackInfo .play_status").each(function(index) {
-    var pos = $(this).offset();
-    var box = $("<div></div>").data("trackIndex",index).css(box_style).css({
-      "top" : pos.top+20,
+  var showButtonAddAlbum = function(Lib) {
+    var thead = $('<thead></thead>').appendTo($("#track_table"));
+    var tr = $('<tr></tr>').appendTo(thead);
+    var td = $('<th colspan="3">Add whole album</th>').appendTo(tr).click(clickButtonAddTracks); 
+    
+    var pos = td.offset();
+    $("<div>+</div>").click(Lib,clickButtonAddTracks).css(box_style).css({
+      "top" : pos.top+2,
+      "left" : pos.left-19
+    }).appendTo(document.body);
+  }
+  var showButtonsAddTrack = function(Lib) {
+    var boxes = [];
+    $("#trackInfo .play_status").each(function(index) {
+      var pos = $(this).offset();
+      var box = $("<div></div>").data("trackIndex",index).css(box_style).css({
+        "top" : pos.top-4,
+        "left" : pos.left-19
+      }).appendTo(document.body);
+      box.hover(function() {
+          var box = $(this);
+          if(box.data("saved"))
+            box.html("&cross;");
+        },function() {
+          var box = $(this);
+          if(box.data("saved"))
+            box.html("&check;");
+      });
+      box.click(Lib,clickButtonAddTrack);
+      if(Lib.trackExists(unsafeWindow.TralbumData.trackinfo[index].id)) {
+        box.html("&check;");
+        box.data("saved",true);
+        box.attr("class","buttonAddTrack saved");
+      } else {
+        box.html("+");
+        box.data("saved",false);
+        box.attr("class","buttonAddTrack notsaved");
+      }
+     boxes.push(box);
+    });
+    window.setInterval(function() {
+      // Update position
+      var play_status = $("#trackInfo .play_status");
+      $("#trackInfo .play_status").each(function(index) {
+        var pos = $(this).offset();
+        boxes[index].css("top",pos.top);
+        boxes[index].css("left",pos.left-19);
+      });
+    },3000);
+    
+  }
+  var showButtonAddSingleTrack = function(Lib) {
+    var pos = $("#trackInfo").offset();
+    var box = $("<div></div>").css(box_style).css({
+      "top" : pos.top+42,
       "left" : pos.left-19
     }).appendTo(document.body);
     box.hover(function() {
@@ -661,8 +923,8 @@ var showButtonsAddTrack = function(Lib) {
         if(box.data("saved"))
           box.html("&check;");
     });
-    box.click(Lib,clickButtonAddTrack);
-    if(Lib.trackExists(unsafeWindow.TralbumData.trackinfo[index].id)) {
+    box.click(Lib,clickButtonAddSingleTrack);
+    if(Lib.trackExists(unsafeWindow.TralbumData.id)) {
       box.html("&check;");
       box.data("saved",true);
       box.attr("class","buttonAddTrack saved");
@@ -671,62 +933,124 @@ var showButtonsAddTrack = function(Lib) {
       box.data("saved",false);
       box.attr("class","buttonAddTrack notsaved");
     }
-  });
-}
-var clickButtonAddTrack = function(ev) {
-  var Lib = ev.data;
-  var box = $(this);
-  var trackIndex = parseInt(box.data("trackIndex"),10);
-  if(box.data("saved")) {
-     // remove track
-    Lib.removeTrack(unsafeWindow.TralbumData.trackinfo[trackIndex].id,function(success) {
-      if(success) {
-        box.html("&cross;").css("color","red");
-        box.data("saved",false);
-        box.attr("class","buttonAddTrack notsaved");
-      } else {
-        box.html("&#x2754;");
+
+  }
+  var clickButtonAddTrack = function(ev) {
+    var Lib = ev.data;
+    var box = $(this);
+    var trackIndex = parseInt(box.data("trackIndex"),10);
+    if(box.data("saved")) {
+       // remove track
+      Lib.removeTrack(unsafeWindow.TralbumData.trackinfo[trackIndex].id,function(success) {
+        if(success) {
+          box.html("&cross;").css("color","red");
+          box.data("saved",false);
+          box.attr("class","buttonAddTrack notsaved");
+        } else {
+          box.html("&#x2754;");
+        }
+      });
+    } else {
+       // add track
+      var lyrics = "";
+      if($("#_lyrics_"+(trackIndex+1)).length > 0) {
+        lyrics = $.trim($("#_lyrics_"+(trackIndex+1)).text());
       }
-    });
-  } else {
-     // add track
-    var lyrics = "";
-    if($("#_lyrics_"+(trackIndex+1)).length > 0) {
-      lyrics = $.trim($("#_lyrics_"+(trackIndex+1)).text());
+      
+      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[trackIndex],unsafeWindow.TralbumData,lyrics,function(success) {
+        if(success) {
+          box.html("&check;");
+          box.data("saved",true);
+          box.attr("class","buttonAddTrack saved");
+        } else {
+          $box.html("&#x2754;");
+        }
+      });
     }
-    
-    Lib.addTrack(unsafeWindow.TralbumData.trackinfo[trackIndex],unsafeWindow.TralbumData,lyrics,function(success) {
-      if(success) {
-        box.html("&check;");
-        box.data("saved",true);
-        box.attr("class","buttonAddTrack saved");
-      } else {
-        $box.html("&#x2754;");
+  }
+  var clickButtonAddTracks = function(ev) {
+    var buttons = $(".buttonAddTrack.notsaved");
+    if(0 === buttons.length) {
+      alert("No songs left to add");
+      return;
+    }
+    if(!confirm("Add "+buttons.length+" songs?")) {
+      return;
+    }
+    buttons.click();
+  }
+  var clickButtonAddSingleTrack = function(ev) {
+    var Lib = ev.data;
+    var box = $(this);
+    if(box.data("saved")) {
+       // remove track
+      Lib.removeTrack(unsafeWindow.TralbumData.id,function(success) {
+        if(success) {
+          box.html("&cross;").css("color","red");
+          box.data("saved",false);
+          box.attr("class","buttonAddTrack notsaved");
+        } else {
+          box.html("&#x2754;");
+        }
+      });
+    } else {
+       // add track
+      var lyrics = unsafeWindow.TralbumData.current.lyrics;
+      if(lyrics) {
+        unsafeWindow.TralbumData.trackinfo[0].has_lyrics = true;
       }
-    });
+      var albumtitle = $("#name-section span[itemprop='inAlbum'] span[itemprop='name']").text();
+      unsafeWindow.TralbumData.albumtitle = albumtitle;
+      var a = $("#name-section span[itemprop='inAlbum'] a[itemprop='url']");
+      if(albumtitle && a.length) {
+        if(!confirm(["It seems like you're on a webpage for a single track.",
+        "If there is a website for the whole album, it is safer to add the track from the album page.",
+        "\nAdd the track from here anyway?",
+        "\nIf this is actually a single track without an album, just ignore the above message and press OK."].join("\n"))) {
+          if(a.length && a[0].href && confirm("Visit album page now?\n"+a[0].href)) {
+            document.location.href = a[0].href;            
+          }
+          return;
+        }
+      }
+      
+      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[0],unsafeWindow.TralbumData,lyrics,function(success) {
+        if(success) {
+          box.html("&check;");
+          box.data("saved",true);
+          box.attr("class","buttonAddTrack saved");
+        } else {
+          $box.html("&#x2754;");
+        }
+      });
+    }
   }
-}
-var clickButtonAddTracks = function(ev) {
-  var buttons = $(".buttonAddTrack.notsaved");
-  if(0 === buttons.length) {
-    alert("No songs left to add");
-    return;
-  }
-  if(!confirm("Add "+buttons.length+" songs?")) {
-    return;
-  }
-  buttons.click();
-}
-
-
+  
+  
   var l = new BCLibrary();
   if(!noButtons && unsafeWindow.TralbumData && document.getElementById("track_table")) {
-    showButtonsAddTrack(l);
-    showButtonAddAlbum(l);
+    // album page
+    var tr = document.getElementById("track_table").getElementsByTagName("tr")
+    if(tr.length > 1) {
+      showButtonAddAlbum(l);
+    }
+    if(tr.length > 0) {
+      showButtonsAddTrack(l);
+    }
+    return {"library":l,"buttons":true};
+  } else if(!noButtons && unsafeWindow.TralbumData && document.getElementById("trackInfoInner")) {
+    // Single track page
+    showButtonAddSingleTrack(l);
     return {"library":l,"buttons":true};
   }
+  
+  
+  
+  
+  
   return {"library":l,"buttons":false};
 }
+
 
 function BCPlayerLib_example() {
   // minimal example
