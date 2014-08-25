@@ -3,17 +3,27 @@
 // @namespace   cuzi
 // @oujs:author cuzi
 // @description Play bandcamp music.
+// @homepageURL https://github.com/cvzi/bcplayer/
 // @icon        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwAQMAAABtzGvEAAAABlBMVEUAAAAclZU8CPpPAAAAAXRSTlMAQObYZgAAAFZJREFUeF6N0DEKAzEMBMBAinxbT/NT9gkuVRg7kCFwqS7bTCVW0uOPPOvDK2hsnELQ2DiFoLFxCkFj4xSC+UMwYGBhYkDRwsRAXfdsBHW9r5HvJ27yBmrWa3qFBFkKAAAAAElFTkSuQmCC
 // @version     2
 // @license     GNUGPL
 // @include     /^https?:\/\/.*bandcamp\..*$/
-// @require     http://ajax.googleapis.com/ajax/libs/jquery/1.7/jquery.min.js
+// @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @grant       GM_setValue
 // @grant       GM_getValue
 // @grant       GM_addStyle
 // @grant       unsafeWindow
 // ==/UserScript==
 "use strict";
+
+
+/*
+
+TODO: save tags
+
+*/
+
+
 
 var doOnceAfterDelay = (function(){
   var to = {};
@@ -58,6 +68,7 @@ function BCLibrary() {
     GM_setValue("bands",JSON.stringify(allBands));
     lastlibversion++;
   };
+  
   
   var addBand = function(id,name) {
     load();
@@ -289,6 +300,7 @@ function BCLibrary() {
   };
   
   this.getTrackById = function(tid) {
+    load();
     if(!(tid in allTracks)) {
       return false;
     }
@@ -324,7 +336,7 @@ function BCLibrary() {
       },
       "record" : trk // Link to the original database entry
     };
-  }; 
+  };
   
 }
 function BCPlayer(Lib,id) {
@@ -358,18 +370,42 @@ function BCPlayer(Lib,id) {
   
   this.playing = false;
   
+  
+  var playerversion = false;
+  var lastplayerversion = false;
   var playlist;
   var playlist_index;
   
   var load = function() {
+    playerversion = parseInt(GM_getValue("playerversion",Number.MIN_SAFE_INTEGER),10);
+    if(lastplayerversion == playerversion) return;
     playlist = JSON.parse(GM_getValue("playlist","[]"));
     playlist_index = JSON.parse(GM_getValue("playlist_index","-1"));
+    lastplayerversion = playerversion;
   };
     
   var save = function() {
+    if(playerversion === false) {
+      throw Error("BCPlayer: save() cannot be called before load()");
+    }
+    playerversion++;
+    
+    if(playerversion == Number.MAX_SAFE_INTEGER) {
+      libersion = Number.MIN_SAFE_INTEGER;
+    }
+    GM_setValue("playerversion",playerversion);
     GM_setValue("playlist",JSON.stringify(playlist));
     GM_setValue("playlist_index",JSON.stringify(playlist_index));
+    lastplayerversion++;
   };
+  
+  
+  
+  
+  
+  
+  
+  
   
   load();
   
@@ -574,7 +610,7 @@ function BCPlayer(Lib,id) {
   
   this.refresh = function(what,noScroll) {
     // what:
-    // 0/false/null/undefined -> refresh all
+    // ! -> refresh all
     // 1 -> only library
     // 2 -> only playlist
     
@@ -588,7 +624,6 @@ function BCPlayer(Lib,id) {
         if(!filter.match(tracks[i])) {
           continue;
         }
-        console.log(tracks[i]);
       
         var tr = $("<tr></tr>");
         var td_ctrl = $('<td class="ctrl" data-tid="'+tracks[i].id+'"></td>');
@@ -889,25 +924,45 @@ function initBCLibrary(noButtons) {
       if(Lib.trackExists(unsafeWindow.TralbumData.trackinfo[index].id)) {
         box.html("&check;");
         box.data("saved",true);
-        box.attr("class","buttonAddTrack saved");
+        box.addClass("buttonAddTrack saved");
       } else {
         box.html("+");
         box.data("saved",false);
-        box.attr("class","buttonAddTrack notsaved");
+        box.addClass("buttonAddTrack notsaved");
       }
      boxes.push(box);
     });
-    window.setInterval(function() {
-      // Update position
-      var play_status = $("#trackInfo .play_status");
+    
+    var updateButtons = function() {
       $("#trackInfo .play_status").each(function(index) {
-        var pos = $(this).offset();
-        boxes[index].css("top",pos.top);
-        boxes[index].css("left",pos.left-19);
+        var $this = $(this);
+        if($this.hasClass("disabled")) {
+          boxes[index].hide();
+          boxes[index].addClass("disabled");
+          boxes[index].removeClass("enabled");
+        } else {
+          var pos = $(this).offset();
+          boxes[index].addClass("enabled");
+          boxes[index].removeClass("disabled");
+          boxes[index].show();
+          boxes[index].css("left",pos.left-19);          // boxes[index].css("top",pos.top);
+          boxes[index].animate({'top':pos.top},400,"linear");
+        }
       });
-    },3000);
+    };
+    
+    // Call once to hide disabled buttons immediately (bandcamp enables buttons after the page has loaded)
+    doOnceAfterDelay("buttonsAddTrackPosition",updateButtons,500);
+    
+    // create an observer instance
+    new MutationObserver(function(mutations) {
+      if(mutations[0].target.id && mutations[0].target.id.indexOf("lyrics") == 0) {
+        doOnceAfterDelay("buttonsAddTrackPosition",updateButtons,100);
+      }
+    }).observe(document.querySelector('#track_table'),{"attributeFilter":["style"],"attributes":true,"subtree":true});
     
   }
+  
   var showButtonAddSingleTrack = function(Lib) {
     var pos = $("#trackInfo").offset();
     var box = $("<div></div>").css(box_style).css({
@@ -927,11 +982,13 @@ function initBCLibrary(noButtons) {
     if(Lib.trackExists(unsafeWindow.TralbumData.id)) {
       box.html("&check;");
       box.data("saved",true);
-      box.attr("class","buttonAddTrack saved");
+      box.addClass("buttonAddTrack saved");
+      box.removeClass("notsaved");
     } else {
       box.html("+");
       box.data("saved",false);
-      box.attr("class","buttonAddTrack notsaved");
+      box.addClass("buttonAddTrack notsaved");
+      box.removeClass("saved");
     }
 
   }
@@ -945,7 +1002,8 @@ function initBCLibrary(noButtons) {
         if(success) {
           box.html("&cross;").css("color","red");
           box.data("saved",false);
-          box.attr("class","buttonAddTrack notsaved");
+          box.addClass("buttonAddTrack notsaved");
+          box.removeClass("saved");
         } else {
           box.html("&#x2754;");
         }
@@ -961,7 +1019,8 @@ function initBCLibrary(noButtons) {
         if(success) {
           box.html("&check;");
           box.data("saved",true);
-          box.attr("class","buttonAddTrack saved");
+          box.addClass("buttonAddTrack saved");
+          box.removeClass("notsaved");
         } else {
           $box.html("&#x2754;");
         }
@@ -969,7 +1028,7 @@ function initBCLibrary(noButtons) {
     }
   }
   var clickButtonAddTracks = function(ev) {
-    var buttons = $(".buttonAddTrack.notsaved");
+    var buttons = $(".buttonAddTrack.notsaved.enabled");
     if(0 === buttons.length) {
       alert("No songs left to add");
       return;
@@ -988,7 +1047,8 @@ function initBCLibrary(noButtons) {
         if(success) {
           box.html("&cross;").css("color","red");
           box.data("saved",false);
-          box.attr("class","buttonAddTrack notsaved");
+          box.addClass("buttonAddTrack notsaved");
+          box.removeClass("saved");
         } else {
           box.html("&#x2754;");
         }
@@ -1018,7 +1078,8 @@ function initBCLibrary(noButtons) {
         if(success) {
           box.html("&check;");
           box.data("saved",true);
-          box.attr("class","buttonAddTrack saved");
+          box.addClass("buttonAddTrack saved");
+          box.removeClass("notsaved");
         } else {
           $box.html("&#x2754;");
         }
