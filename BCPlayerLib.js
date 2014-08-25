@@ -17,13 +17,6 @@
 "use strict";
 
 
-/*
-
-TODO: save tags
-
-*/
-
-
 
 var doOnceAfterDelay = (function(){
   var to = {};
@@ -326,7 +319,7 @@ function BCLibrary() {
         "cover" : alb.artFullsizeUrl,
         "credits" : alb.credits,
         "publish_date" : alb.publish_date,
-        "release_date" : alb.release_date,
+        "release_date" : alb.release_date?alb.release_date:alb.publish_date,
         "title" : alb.title,
         "thumb" : alb.artThumbURL,
         "totaltracks" : alb.totaltracks,
