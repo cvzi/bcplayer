@@ -5,7 +5,7 @@
 // @description Play bandcamp music.
 // @homepageURL https://github.com/cvzi/bcplayer/
 // @icon        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwAQMAAABtzGvEAAAABlBMVEUAAAAclZU8CPpPAAAAAXRSTlMAQObYZgAAAFZJREFUeF6N0DEKAzEMBMBAinxbT/NT9gkuVRg7kCFwqS7bTCVW0uOPPOvDK2hsnELQ2DiFoLFxCkFj4xSC+UMwYGBhYkDRwsRAXfdsBHW9r5HvJ27yBmrWa3qFBFkKAAAAAElFTkSuQmCC
-// @version     2
+// @version     3
 // @license     GNUGPL
 // @include     /^https?:\/\/.*bandcamp\..*$/
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
@@ -17,14 +17,27 @@
 "use strict";
 
 
+/*
 
-var doOnceAfterDelay = (function(){
+TODO: save tags
+
+*/
+
+
+
+
+var doOnceAfterDelay = (function(){ 
   var to = {};
-  return function(id, cb, wait){
+  return function(id, fun, delay, thisArg) { // id, fun, delay, [thisArg, [param1, param2 ...]]
     if(id in to) {
       clearTimeout(to[id]);
     }
-    to[id] = setTimeout(cb, wait);
+    if(arguments.length < 4) {
+      to[id] = setTimeout(fun, delay);
+    } else {
+      var args = Array.prototype.slice.call(arguments,4);
+      to[id] = setTimeout(function() { fun.apply(thisArg,args); }, delay);
+    }
   };
 })();
 
@@ -292,6 +305,42 @@ function BCLibrary() {
     return result;
   };
   
+  this.getTracks = function(uid,filter,sortstring) {
+    load();
+    var result = [];
+    for(var tid in allTracks) {
+      var track = this.getTrackById(tid);
+      if(filter.match(track)) {
+        result.push(track);
+      }
+    }
+    
+    if(sortstring) {
+      var sortfun = getSortFunction(sortstring);
+      result.sort(sortfun);
+    }
+    
+    // Pseudo iterator
+    return {
+      time : new Date(),
+      uid : (typeof uid === "undefined")?(new Date()).getTime():uid,
+      index : 0,
+      length : result.length,
+      next : function() {
+         return result[this.index++];
+      },
+      hasNext : function() {
+        return this.index < this.length;      
+      },
+      reset : function() {
+        this.index = 0;
+      }
+    
+    };  
+  };
+  
+  
+  
   this.getTrackById = function(tid) {
     load();
     if(!(tid in allTracks)) {
@@ -331,6 +380,68 @@ function BCLibrary() {
     };
   };
   
+  
+  var Sorting = {  
+    'duration' : function(a, b) {
+      return a.duration-b.duration;
+    },
+    'title' : function (a, b) {
+     return a.title.localeCompare(b.title);
+    },
+    'band.title' : function (a, b) {
+     return a.band.title.localeCompare(b.band.title);
+    },    
+    'album.title' : function (a, b) {
+     return a.album.title.localeCompare(b.album.title);
+    },    
+    'track_num' : function (a, b) {
+     return a.track_num-b.track_num;
+    }  
+  
+  
+  };
+  
+  
+  var getSortFunction = function(sortstring) { // i.e. "band.title,album.title,desc:track_num"  -> sort band.title -> if equal -> sort album.title -> if equal -> sort track_num DESC
+    if(!sortstring) {
+      return function(a, b) {
+        return 0;
+      }
+    }
+  
+    var sortKeys = sortstring.split(","); //  [ [1,'band.title'], [dir_factor,key],...  ]
+    for(var i = 0; i < sortKeys.length; i++) {
+      sortKeys[i] = sortKeys[i].split(":");
+      if(sortKeys[i].length == 1) {
+        sortKeys[i].unshift(1); // Default direction
+      } else if(sortKeys[i][0] == 'asc') {
+        sortKeys[i][0] = 1;
+      } else {
+        sortKeys[i][0] = -1;
+      }
+
+      
+      if(!Sorting[sortKeys[i][1]]) {
+         throw new Error("Sorting with this field is not supported: "+sortKeys[i][1]);
+      }
+      
+    }
+    return function(a, b) {
+      var x;
+      var i;
+      for(i = 0; i < sortKeys.length-1; i++) {
+        x = Sorting[sortKeys[i][1]](a,b);
+        if(x !== 0) {
+          return sortKeys[i][0]*x;
+        }
+      }
+      return sortKeys[i][0] * Sorting[sortKeys[i][1]](a,b);
+    };  
+  };
+  
+  
+  
+  
 }
 function BCPlayer(Lib,id) {
   if(!(Lib instanceof BCLibrary)) {
@@ -360,6 +471,11 @@ function BCPlayer(Lib,id) {
   };
   
   var searchString = false;
+  var sortingString = false;
+  var sortBy = {
+    field: null,
+    order: 'asc'
+  };
   
   this.playing = false;
   
@@ -392,15 +508,10 @@ function BCPlayer(Lib,id) {
     lastplayerversion++;
   };
   
-  
-  
-  
-  
-  
-  
-  
-  
   load();
+  
+  
+  var currentResult = false;
   
   var speaker = {
     "tag" : $("<audio></audio>"),
@@ -443,6 +554,31 @@ function BCPlayer(Lib,id) {
     }
   
   };
+  
+  var libaryTrScrolledOver = function(tr) { 
+    // if visible or scrolled over: true
+    
+    if(!tr) {
+      return false;
+    }
+    var lib = mainWindow.find(".library");
+    
+    var pos = tr.position();
+
+    if(!pos) {
+      return false;
+    }
+    
+    var top = parseInt(pos.top,10);
+    var height = lib.height();   
+    
+    //just visible: if(top < height || top > 2*height) {
+    if(top > 2*height) {
+      return false;
+    }
+    return true;
+  };
+  
     
   // Public
   // ######
@@ -453,6 +589,17 @@ function BCPlayer(Lib,id) {
   
   this.getLibrary = function() {
     return Lib;
+  };
+  
+  this.setSorting = function(str) {
+    if(str) {
+      sortingString = str;
+    } else {
+      sortingString = false;
+    }
+  };
+  this.getSorting = function() {
+    return sortingString;
   };
 
   this.getMainWindow = function() {
@@ -482,6 +629,19 @@ function BCPlayer(Lib,id) {
         },400);
       });
       mainWindow.find(".status").append(searchfield);
+      
+      
+      // Add scroll event for library placeholder
+      var libdiv = mainWindow.find(".library");
+      libdiv.scroll(this,function(ev) {
+        doOnceAfterDelay("libraryScrollEvent",function(ev) {
+          if(libaryTrScrolledOver(libdiv.find(".libraryplaceholder"))) {
+            this.refresh(3);
+          }
+        },400,ev.data);
+      });
+      
+      
     }
     return mainWindow;
   };
@@ -606,44 +766,56 @@ function BCPlayer(Lib,id) {
     // ! -> refresh all
     // 1 -> only library
     // 2 -> only playlist
-    
+    // 3 -> scroll down library
+
     // Library
-    if(!what || 1 === what) {
+    if(!what || Set([1,3]).has(what)) {
       var scrollPosition = mainWindow.find(".library").scrollTop();  // Save scrollbar positon
-      var tracks = Lib.getAllTracks();
-      mainWindow.find(".library tbody").html("");
-      var filter = this.parseSearch(searchString);
-      for(var i = 0; i < tracks.length && i < 1000; i++) {
-        if(!filter.match(tracks[i])) {
-          continue;
+      var tbody = mainWindow.find(".library tbody");
+      if(what != 3) {
+        tbody.html("");
+      }
+      var uid = searchString+sortingString;
+      if(!currentResult || currentResult.uid != uid || (new Date())-currentResult.time > 20000)  { // Result outdated
+        currentResult = Lib.getTracks(uid,this.parseSearch(searchString),sortingString);
+        if(!noScroll) {
+        scrollPosition = 0;
+        mainWindow.find(".library").scrollTop(0);
         }
-      
+      } else if(what != 3) {
+        currentResult.reset(); // Start at the top again
+      } else {
+        // Scroll down
+      }
+      for(var i = 0; i < 100 && currentResult.hasNext(); i++) {
+        var track = currentResult.next();
+
         var tr = $("<tr></tr>");
-        var td_ctrl = $('<td class="ctrl" data-tid="'+tracks[i].id+'"></td>');
+        var td_ctrl = $('<td class="ctrl" data-tid="'+track.id+'"></td>');
         var box_enqueue = $('<div title="Add to playlist" class="enqueue">+</div>').click(this,events.enqueue);
         tr.append(td_ctrl.append(box_enqueue));
-        tr.appendTo(mainWindow.find(".library tbody"));
+        tr.appendTo(tbody);
         for(var j = 0; j < columns.length; j++) {
           var td = $("<td></td>");
           if(columns[j].get) {
-            td.html(columns[j].get(tracks[i]));
+            td.html(columns[j].get(track));
           } else {
             if(columns[j].key.indexOf(".") != -1) {
               var keys = columns[j].key.split(".");
-              var c = tracks[i];
+              var c = track;
               for(var k = 0; k < keys.length; k++) {
                 c = c[keys[k]];
               }
               td.html(c);
             } else {
-              td.html(tracks[i][columns[j].key]);
+              td.html(track[columns[j].key]);
             }
           }
-          if(columns[j].click) {
-            td.click(this,columns[j].click);
+          if(columns[j].fieldclick) {
+            td.click(this,columns[j].fieldclick);
           } 
-          if(columns[j].dblclick) {
-            td.dblclick(this,columns[j].dblclick);
+          if(columns[j].fielddblclick) {
+            td.dblclick(this,columns[j].fielddblclick);
           } 
           if(columns[j].mouseenter) {
             td.mouseenter(this,columns[j].mouseenter);
@@ -653,13 +825,51 @@ function BCPlayer(Lib,id) {
           } 
           tr.append(td);
         } 
-        if(999 == i) {
-          tr = $("<tr></tr>");
-          tr.appendTo(mainWindow.find(".library tbody"));
-          tr.append($("<td colspan=\"3\">More...</td>"));
-          
-        }
       }
+      
+      // Copy table head
+      window.setTimeout(function() {
+        var pos = mainWindow.find(".library").offset();
+        var tablecopy = mainWindow.find("#tableheadcopy");
+        if(tablecopy.length > 0) {
+          tablecopy.empty();
+        } else {
+          tablecopy = $("<table>").attr("id","tableheadcopy").css({'position':'absolute','top':pos.top-2,'left':pos.left}).appendTo(mainWindow);
+        }
+        var orgtr = mainWindow.find(".tablehead");
+        var tr = orgtr.clone(true);
+        var th = tr.find("th");
+        orgtr.find("th").each(function(i) {
+          th.eq(i).attr("width",$(this).innerWidth()-11);
+        });
+        var head = $("<thead>").appendTo(tablecopy).append(tr);
+      },0);
+      
+      // Placeholder
+      var ph = tbody.find(".libraryplaceholder");
+      if(currentResult.hasNext()) {
+        var remaining = currentResult.length - currentResult.index - 1;
+
+        if(ph.length) {
+          // Adjust placeholder
+          ph.find("td").css("height",32*remaining);
+          ph.appendTo(tbody);
+        } else {
+          // Add placeholder
+          ph = $("<tr></tr>");
+          ph.addClass("libraryplaceholder");
+          ph.append($("<td colspan=\"3\">More...</td>").css("height",32*remaining));
+          ph.appendTo(tbody);
+        }
+        
+        if(libaryTrScrolledOver(ph)) {
+          this.refresh(3); // Still visible? then load next          
+        }
+        
+      } else if(ph.length) {
+        ph.remove();
+      }
+      
       if(!noScroll) {
         mainWindow.find(".library").scrollTop(scrollPosition);  // Restore scrollbar positon
       }
@@ -704,16 +914,19 @@ function BCPlayer(Lib,id) {
     }
     
     
-  };
+  }; 
   
   this.setColumns = function(cols) {
     // cols = [ {title: "Title", key: track.band.name, get: function(track) {  return track.duration;  }, } ,...  ] 
-    var th = $("<th></th>");
-    mainWindow.find(".tablehead").append(th);
+    mainWindow.find(".tablehead").append("<th></th>");
     for(var i = 0; i < cols.length; i++) {
       cols[i].th = $("<th></th>").html(cols[i].title);
+      if(cols[i].headerclick) {
+        cols[i].th.click(this,cols[i].headerclick);
+      }
       mainWindow.find(".tablehead").append(cols[i].th);
-    }  
+    }
+    
     columns = cols;
     this.refresh(1);
   };
