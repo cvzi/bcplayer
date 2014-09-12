@@ -26,6 +26,7 @@ TODO: save tags
 
 
 
+
 var doOnceAfterDelay = (function(){ 
   var to = {};
   return function(id, fun, delay, thisArg) { // id, fun, delay, [thisArg, [param1, param2 ...]]
@@ -197,6 +198,11 @@ function BCLibrary() {
   
   this.toString = function() {
     return "[Object Library: Version-"+libversion+"]";
+  };
+  
+  this.totalTracks = function() {
+    load();
+    return Object.keys(allTracks).length;  
   };
   
   this.trackExists = function(id) {
@@ -606,11 +612,13 @@ function BCPlayer(Lib,id) {
     if(!mainWindow) {
       mainWindow = $('\
       <div id="'+id+'">\
-        <div class="status"> Search: </div>\
+        <div class="status"></div>\
+        <div class="seperator seperator_status_playlist"></div>\
         <div class="playlist">\
           <ol class="playlistol">\
           </ol>\
         </div>\
+        <div class="seperator seperator_playlist_library"></div>\
         <div class="library">\
           <table>\
             <thead>\
@@ -767,11 +775,13 @@ function BCPlayer(Lib,id) {
     // 1 -> only library
     // 2 -> only playlist
     // 3 -> scroll down library
+    
+    var libraryTable = mainWindow.find(".library")
 
     // Library
     if(!what || Set([1,3]).has(what)) {
-      var scrollPosition = mainWindow.find(".library").scrollTop();  // Save scrollbar positon
-      var tbody = mainWindow.find(".library tbody");
+      var scrollPosition = libraryTable.scrollTop();  // Save scrollbar positon
+      var tbody = libraryTable.find("tbody");
       if(what != 3) {
         tbody.html("");
       }
@@ -829,18 +839,22 @@ function BCPlayer(Lib,id) {
       
       // Copy table head
       window.setTimeout(function() {
-        var pos = mainWindow.find(".library").offset();
-        var tablecopy = mainWindow.find("#tableheadcopy");
-        if(tablecopy.length > 0) {
+        var pos = {"top": libraryTable[0].offsetTop, "left": libraryTable[0].offsetLeft};
+        var width = libraryTable[0].clientWidth;
+        var tablecopydiv = mainWindow.find("#tableheadcopy")
+        var tablecopy = mainWindow.find("#tableheadcopy table");
+        if(tablecopydiv.length > 0) {
           tablecopy.empty();
         } else {
-          tablecopy = $("<table>").attr("id","tableheadcopy").css({'position':'absolute','top':pos.top-2,'left':pos.left}).appendTo(mainWindow);
+          tablecopydiv = $("<div>").attr("id","tableheadcopy").appendTo(mainWindow);
+          tablecopy = $("<table>").appendTo(tablecopydiv);
         }
+        tablecopydiv.css({'position':'absolute','top':pos.top,'left':pos.left,'width':width})
         var orgtr = mainWindow.find(".tablehead");
         var tr = orgtr.clone(true);
         var th = tr.find("th");
         orgtr.find("th").each(function(i) {
-          th.eq(i).attr("width",$(this).innerWidth()-11);
+          th.eq(i).attr("width",$(this).innerWidth()-10);
         });
         var head = $("<thead>").appendTo(tablecopy).append(tr);
       },0);
