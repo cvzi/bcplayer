@@ -5,7 +5,7 @@
 // @description Play bandcamp music.
 // @homepageURL https://github.com/cvzi/bcplayer/
 // @icon        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwAQMAAABtzGvEAAAABlBMVEUAAAAclZU8CPpPAAAAAXRSTlMAQObYZgAAAFZJREFUeF6N0DEKAzEMBMBAinxbT/NT9gkuVRg7kCFwqS7bTCVW0uOPPOvDK2hsnELQ2DiFoLFxCkFj4xSC+UMwYGBhYkDRwsRAXfdsBHW9r5HvJ27yBmrWa3qFBFkKAAAAAElFTkSuQmCC
-// @version     3
+// @version     4
 // @license     GNUGPL
 // @include     /^https?:\/\/.*bandcamp\..*$/
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
@@ -15,15 +15,6 @@
 // @grant       unsafeWindow
 // ==/UserScript==
 "use strict";
-
-
-/*
-
-TODO: save tags
-
-*/
-
-
 
 
 
@@ -196,6 +187,8 @@ function BCLibrary() {
   // Public
   // ######
   
+  this.changed = false;
+  
   this.toString = function() {
     return "[Object Library: Version-"+libversion+"]";
   };
@@ -213,7 +206,7 @@ function BCLibrary() {
     return false;
   };
   
-  this.addTrack = function(trackobj,albumobj,lyrics,cb) {
+  this.addTrack = function(trackobj,albumobj,other,cb) {
     load();
     
     // Already exists?
@@ -266,15 +259,29 @@ function BCLibrary() {
       allTracks[trackobj.id][subkeys.pop()] = c;
     }
     
-    if(trackobj.has_lyrics && $.trim(lyrics)) {
-      allTracks[trackobj.id]['lyrics'] = $.trim(lyrics);
-    }
     if(!trackobj.track_num) {
      allTracks[trackobj.id]['track_num'] = 1;
     }
     
+    allTracks[trackobj.id]['tags'] = [];
+      
+    if(typeof other == "object") {
+    
+      // Lyrics
+      if(trackobj.has_lyrics && $.trim(other.lyrics||"")) {
+        allTracks[trackobj.id]['lyrics'] = $.trim(other.lyrics);
+      }
+      
+      // Save album tags as track tags
+      if(other.tags && other.tags.length) {
+        allTracks[trackobj.id]['tags'] = other.tags.slice(0);
+      }
+    
+    }
+    
 
     save();
+    this.changed = true;
     cb(true);
   };
   
@@ -298,7 +305,9 @@ function BCLibrary() {
     // Delete Track    
     delete allTracks[id];
   
+  
     save();
+    this.changed = true;
     cb(true);
   };
   
@@ -360,6 +369,7 @@ function BCLibrary() {
       "duration" : trk.duration,
       "file" : trk.file,
       "lyrics" : trk.lyrics,
+      "tags" : trk.tags ||[],
       "title" : trk.title,
       "track_num" : trk.track_num, 
       "band" : {
@@ -484,7 +494,6 @@ function BCPlayer(Lib,id) {
   };
   
   this.playing = false;
-  
   
   var playerversion = false;
   var lastplayerversion = false;
@@ -668,7 +677,7 @@ function BCPlayer(Lib,id) {
     if(s.indexOf(":") == -1) {
       return {
         match: function(track) {
-          return track.title.toLowerCase().indexOf(s) != -1 || track.band.title.toLowerCase().indexOf(s) != -1 || track.album.title.toLowerCase().indexOf(s) != -1;
+          return track.title.toLowerCase().indexOf(s) != -1 || track.band.title.toLowerCase().indexOf(s) != -1 || track.album.title.toLowerCase().indexOf(s) != -1 || track.tags.join(",").toLowerCase().indexOf(s) != -1;
         } 
       };
     }
@@ -676,13 +685,27 @@ function BCPlayer(Lib,id) {
     // Everything beyond this point is for searching with magic words.
     
     
-    // Example search string: "work artist :Gang starr album :Moment"
-    // Search for a song where the artist contains "Gang starr" AND the album contains "Moment"
-    // AND one of artist,album or songtitle contain "work".
+    /* Example search string: "work artist :Gang starr album :Moment"
+       Search for a song where the artist contains "Gang starr" AND the album contains "Moment"
+       AND one of artist,album or songtitle contain "work".
+      
+       new SearchFunction(["tags"],{  "split": "," , "operatorAnd": true}) 
+       Example search string: "tags: rock,punk" 
+       Search for a song that has the rock AND the tag punk
+    */
     
-    var SearchFunction = function(keys) {
+    var SearchFunction = function(keys,options) {
        // this class parses the cut-up search string and the attribute keys
        var keys = keys;
+       
+       var operatorAnd = options && options.operatorAnd;
+       var split = false;
+       var splitStr;
+       if(options && options.split) {
+         split = true;
+         splitStr = options.split;
+       }
+       
        var str = [];
 
        this.push = function(v) {
@@ -690,25 +713,68 @@ function BCPlayer(Lib,id) {
        };
        
        var searchStr; // Evaluated from "str"
+       var searchStrIsArray = false;
        var subkeys = []; // Evaluated from "keys"
        
        this.match = function(track) {
-         for(var i = 0; i < subkeys.length; i++) { // foreach key
-           var c = track[subkeys[i][0]];
-           for(var j = 1; j < subkeys[i].length; j++) { // get the actual data for this key
-             c = c[subkeys[i][j]];
+       
+         if(searchStrIsArray && operatorAnd) { // searchStr is an Array and all elements need to match
+           for(var i = 0; i < subkeys.length; i++) { // foreach key
+             var c = track[subkeys[i][0]];
+             for(var j = 1; j < subkeys[i].length; j++) { // get the actual data for this key
+               c = c[subkeys[i][j]];
+             }
+             var matches = 0;
+             c = (""+c).toLowerCase();
+             for(var k = 0; k < searchStr.length; k++) {
+               if(c.indexOf(searchStr[k]) != -1) { // check for a match or continue
+                 matches++;
+                 if(matches == searchStr.length) {
+                   return true;
+                 }
+               }
+             }
            }
-           if((""+c).toLowerCase().indexOf(searchStr) != -1) { // check for a match or continue
-             return true;
+           return false;
+         } else { // searchStr is a single string, maybe concated with space
+           for(var i = 0; i < subkeys.length; i++) { // foreach key
+             var c = track[subkeys[i][0]];
+             for(var j = 1; j < subkeys[i].length; j++) { // get the actual data for this key
+               c = c[subkeys[i][j]];
+             }
+             if((""+c).toLowerCase().indexOf(searchStr) != -1) { // check for a match or continue
+               return true;
+             }
            }
+           return false;
          }
-         return false;
        };  
        
        this.eval = function() {
          if(str.length > 0) {
            // Search string
-           searchStr = str.join(" ");
+
+           if(split && splitStr === " " && str.length > 1) {
+             searchStr = str.slice(0);
+             searchStrIsArray = true;
+           } if(split && str.join("").indexOf(splitStr)) {
+             var tmp = str.join(" ").split(splitStr);
+             searchStr = [];
+             for(var i = 0; i < tmp.length; i++) {
+               if($.trim(tmp[i])) {
+                 searchStr.push($.trim(tmp[i]));
+               }             
+             }
+             if(searchStr.length > 1) {
+               searchStrIsArray = true;
+             } else {
+               searchStr = searchStr[0];
+               searchStrIsArray = false;
+             }
+           } else {
+             searchStr = str.join(" ");
+             searchStrIsArray = false;
+           }
            
            // Extract subkeys
            for(var i = 0; i < keys.length; i++) {
@@ -724,10 +790,11 @@ function BCPlayer(Lib,id) {
     };
     
     var magicword = {
-      "all" : new SearchFunction(["title","album.title","band.title"]),
+      "all" : new SearchFunction(["title","album.title","band.title","tags"]), // IMPORTANT: This rule is only for strings that contain a ":"  See the configuartion above for strings without colon.
       "artist" : new SearchFunction(["band.title"]),      
       "album" : new SearchFunction(["album.title"]), 
-      "title" : new SearchFunction(["title"])
+      "title" : new SearchFunction(["title"]),
+      "tags" : new SearchFunction(["tags"],{"split":",","operatorAnd":true})
     };
     // Aliases:
     magicword.band = magicword.artist;
@@ -769,9 +836,18 @@ function BCPlayer(Lib,id) {
   };
   
   
+  
+  this.isLibraryDeprecated = function() {
+    if(Lib.changed) {
+      Lib.changed = false;
+      return true;
+    }
+    return false
+  };
+
   this.refresh = function(what,noScroll) {
     // what:
-    // ! -> refresh all
+    // false -> refresh all
     // 1 -> only library
     // 2 -> only playlist
     // 3 -> scroll down library
@@ -786,7 +862,7 @@ function BCPlayer(Lib,id) {
         tbody.html("");
       }
       var uid = searchString+sortingString;
-      if(!currentResult || currentResult.uid != uid || (new Date())-currentResult.time > 20000)  { // Result outdated
+      if(this.isLibraryDeprecated() || !currentResult || currentResult.uid != uid || (new Date())-currentResult.time > 20000)  { // Result outdated
         currentResult = Lib.getTracks(uid,this.parseSearch(searchString),sortingString);
         if(!noScroll) {
         scrollPosition = 0;
@@ -1234,8 +1310,15 @@ function initBCLibrary(noButtons) {
       if($("#_lyrics_"+(trackIndex+1)).length > 0) {
         lyrics = $.trim($("#_lyrics_"+(trackIndex+1)).text());
       }
+      var tags = [];
+        $(".tralbumData.tralbum-tags .tag").each(function() {
+          var $this = $(this);
+          if($this.text()) {
+            tags.push($this.text());
+          }
+        });
       
-      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[trackIndex],unsafeWindow.TralbumData,lyrics,function(success) {
+      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[trackIndex],unsafeWindow.TralbumData,{"lyrics":lyrics,"tags":tags},function(success) {
         if(success) {
           box.html("&check;");
           box.data("saved",true);
@@ -1279,6 +1362,14 @@ function initBCLibrary(noButtons) {
       if(lyrics) {
         unsafeWindow.TralbumData.trackinfo[0].has_lyrics = true;
       }
+      var tags = [];
+        $(".tralbumData.tralbum-tags .tag").each(function() {
+          var $this = $(this);
+          if($this.text()) {
+            tags.push($this.text());
+          }
+        });
+      
       var albumtitle = $("#name-section span[itemprop='inAlbum'] span[itemprop='name']").text();
       unsafeWindow.TralbumData.albumtitle = albumtitle;
       var a = $("#name-section span[itemprop='inAlbum'] a[itemprop='url']");
@@ -1294,7 +1385,7 @@ function initBCLibrary(noButtons) {
         }
       }
       
-      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[0],unsafeWindow.TralbumData,lyrics,function(success) {
+      Lib.addTrack(unsafeWindow.TralbumData.trackinfo[0],unsafeWindow.TralbumData,{"lyrics":lyrics,"tags":tags},function(success) {
         if(success) {
           box.html("&check;");
           box.data("saved",true);
