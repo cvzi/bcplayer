@@ -5,7 +5,7 @@
 // @description Play bandcamp music.
 // @homepageURL https://github.com/cvzi/bcplayer/
 // @icon        data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwAQMAAABtzGvEAAAABlBMVEUAAAAclZU8CPpPAAAAAXRSTlMAQObYZgAAAFZJREFUeF6N0DEKAzEMBMBAinxbT/NT9gkuVRg7kCFwqS7bTCVW0uOPPOvDK2hsnELQ2DiFoLFxCkFj4xSC+UMwYGBhYkDRwsRAXfdsBHW9r5HvJ27yBmrWa3qFBFkKAAAAAElFTkSuQmCC
-// @version     4
+// @version     5
 // @license     GNUGPL
 // @include     /^https?:\/\/.*bandcamp\..*$/
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
@@ -855,7 +855,7 @@ function BCPlayer(Lib,id) {
     var libraryTable = mainWindow.find(".library")
 
     // Library
-    if(!what || Set([1,3]).has(what)) {
+    if(!what || (new Set([1,3])).has(what)) {
       var scrollPosition = libraryTable.scrollTop();  // Save scrollbar positon
       var tbody = libraryTable.find("tbody");
       if(what != 3) {
@@ -1189,16 +1189,17 @@ function initBCLibrary(noButtons) {
     };
 
   var showButtonAddAlbum = function(Lib) {
-    var thead = $('<thead></thead>').appendTo($("#track_table"));
+    var thead = $('<thead></thead>').attr('id','buttonAddAlbum').appendTo($("#track_table"));
     var tr = $('<tr></tr>').appendTo(thead);
     var td = $('<th colspan="3">Add whole album</th>').appendTo(tr).click(clickButtonAddTracks); 
-    
-    var pos = td.offset();
+
     $("<div>+</div>").click(Lib,clickButtonAddTracks).css(box_style).css({
-      "top" : pos.top+2,
-      "left" : pos.left-19
-    }).appendTo(document.body);
-  }
+      "display" : "inline-block",
+      "margin-left" : "-25px"
+    }).prependTo(td);
+    
+  };
+  
   var showButtonsAddTrack = function(Lib) {
     var boxes = [];
     $("#trackInfo .play_status").each(function(index) {
@@ -1230,6 +1231,7 @@ function initBCLibrary(noButtons) {
     });
     
     var updateButtons = function() {
+      var n = 0; // Active (i.e. not disabled) buttons
       $("#trackInfo .play_status").each(function(index) {
         var $this = $(this);
         if($this.hasClass("disabled")) {
@@ -1237,6 +1239,7 @@ function initBCLibrary(noButtons) {
           boxes[index].addClass("disabled");
           boxes[index].removeClass("enabled");
         } else {
+          n++;
           var pos = $(this).offset();
           boxes[index].addClass("enabled");
           boxes[index].removeClass("disabled");
@@ -1245,10 +1248,19 @@ function initBCLibrary(noButtons) {
           boxes[index].animate({'top':pos.top},400,"linear");
         }
       });
+      if(n == 0) {
+        $('#buttonAddAlbum').hide();
+      } else {
+        $('#buttonAddAlbum').show();
+      }
+      
+      
     };
     
     // Call once to hide disabled buttons immediately (bandcamp enables buttons after the page has loaded)
     doOnceAfterDelay("buttonsAddTrackPosition",updateButtons,500);
+    // Call again because some designs/styles load very slowly
+    doOnceAfterDelay("buttonsAddTrackPosition1",updateButtons,2000);
     
     // create an observer instance
     new MutationObserver(function(mutations) {
